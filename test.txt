@@ -1,0 +1,15 @@
+PS C:\Users\Krishna Kapadia\OneDrive\Desktop\ticket_for_krishna> & "C:/Users/Krishna Kapadia/AppData/Local/Programs/Python/Python313/python.exe" "c:/Users/Krishna Kapadia/OneDrive/Desktop/ticket_for_krishna/run.py"
+2025-11-12 12:09:19,830 [INFO] [data] [MainThread] : trying to connect with mysql database
+2025-11-12 12:09:19,868 [INFO] [data] [MainThread] : Connected to mysql database
+2025-11-12 12:09:19,869 [INFO] [data] [MainThread] : started downloading for index:BANKNIFTY and segment is StandardSegment.CALL
+2025-11-12 12:09:44,079 [INFO] [data] [MainThread] : Started loading metadata and resampling arrays.
+2025-11-12 12:09:44,143 [INFO] [data] [MainThread] : Completed loading metadata and resampling arrays.
+2025-11-12 12:09:44,173 [INFO] [data] [MainThread] : finished downloading for index:BANKNIFTY and segment is StandardSegment.CALL
+2025-11-12 12:09:44,174 [INFO] [data] [MainThread] : started downloading for index:BANKNIFTY and segment is StandardSegment.PUT
+2025-11-12 12:10:06,803 [INFO] [data] [MainThread] : Started loading metadata and resampling arrays.
+2025-11-12 12:10:06,861 [INFO] [data] [MainThread] : Completed loading metadata and resampling arrays.
+2025-11-12 12:10:06,888 [INFO] [data] [MainThread] : finished downloading for index:BANKNIFTY and segment is StandardSegment.PUT
+2025-11-12 12:10:06,888 [INFO] [data] [MainThread] : started downloading for index:BANKNIFTY and segment is StandardSegment.CASH
+2025-11-12 12:10:07,624 [INFO] [data] [MainThread] : Started loading metadata and resampling arrays.
+2025-11-12 12:10:07,625 [INFO] [data] [MainThread] : Completed loading metadata and resampling arrays.
+2025-11-12 12:10:07,625 [INFO] [data] [MainThread] : finished downloading for index:BANKNIFTY and segment is StandardSegment.CASH

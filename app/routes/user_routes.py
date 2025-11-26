@@ -8,12 +8,15 @@ from connection_test import get_instrument_token, stock_data
 import pandas as pd
 import numpy as np
 import os
+import logging
 
 token_bp = Blueprint("get_token", __name__)
 stock_bp = Blueprint("get_stock", __name__)
 UserStock_bp = Blueprint("user_stock", __name__)
 data_resampling_bp = Blueprint("data_resampling", __name__)
 indicators_bp = Blueprint("stock_indicators", __name__)
+compare_db_feather_bp = Blueprint("db_fether_compare", __name__)
+nested_array_bp = Blueprint("array_sma_nested", __name__)
 
 
 @token_bp.route("/get_token", methods=["POST"])
@@ -388,12 +391,30 @@ def stock_indicators():
         "day": "02"             # optional
     }
     """
+
+    # logging data
+    logger= logging.getLogger()
+    logging.basicConfig(
+        filename="nested_log.txt",
+        level=logging.INFO,
+        format="%(asctime)s - %(message)s",
+    )
+
+    # fetching data from input
     data = request.get_json()
     if not data or "symbol" not in data or "minute" not in data:
         return jsonify({"error": "symbol and minute are required"}), 400
 
-    # --- Normalize input ---
     symbol_input = data["symbol"]
+    minute = int(data["minute"])
+    target = float(data.get("target", 2))
+    stoploss = float(data.get("stoploss", 1))
+    sma_periods = data.get("sma_periods", [5])
+    rsi_periods = data.get("rsi_periods", [])
+    base_path = os.path.normpath("dataset")
+    results = {}
+
+    # --- Normalize symbol input ---
     if isinstance(symbol_input, str):
         symbols = [symbol_input.upper()]
     elif isinstance(symbol_input, list):
@@ -403,19 +424,18 @@ def stock_indicators():
     else:
         return jsonify({"error": "Field 'symbol' must be a string or list"}), 400
 
-    minute = int(data["minute"])
-    sma_periods = data.get("sma_periods", [5])
-    rsi_periods = data.get("rsi_periods", [])
+    # --- Normalize sma input ---
     if isinstance(sma_periods, int):
         sma_periods = [sma_periods]
     elif not isinstance(sma_periods, list):
         sma_periods = []
+
+    # --- Normalize rsi input ---
     if isinstance(rsi_periods, int):
         rsi_periods = [rsi_periods]
     elif not isinstance(rsi_periods, list):
         rsi_periods = []
-    base_path = os.path.normpath("dataset")
-    results = {}
+
 
     # --- Determine target paths ---
     year = data.get("year")
@@ -456,9 +476,11 @@ def stock_indicators():
     for symbol in symbols:
         all_resampled = []
         source_files = []
+        nested_dict = {}
+        num = 0
 
         for target_path in target_paths:
-            file_name = f"{symbol.lower()}_cash.feather"
+            file_name = f"{symbol.lower()}.feather"
             file_path = os.path.join(target_path, file_name)
 
             if not os.path.exists(file_path):
@@ -482,7 +504,8 @@ def stock_indicators():
 
             if df.empty:
                 continue
-
+            
+            # Converting datetime format
             if "Datetime" not in df.columns:
                 if "date" in df.columns and "time" in df.columns:
                     df["Datetime"] = pd.to_datetime(
@@ -507,7 +530,7 @@ def stock_indicators():
             if not required_cols.issubset(df.columns):
                 continue
 
-            rule = f"{minute}T"
+            rule = f"{minute}min"
             resampled = (
                 df.resample(rule)
                 .agg(
@@ -521,6 +544,45 @@ def stock_indicators():
                 .dropna()
                 .reset_index()
             )
+
+            # --- data in nested dict ---
+
+            for _, row in df.iterrows():
+                base_symbol = symbol.split("_")[0]  # expiry e.g. acc from acc_cash
+                instrument = symbol
+                date = str(row["date"]).split(".")[0]
+                indices_ist = str(row["symbol"]) if "expiry" in row.index else None
+                # create base_symbol key if not exists
+                if base_symbol not in nested_dict:
+                    nested_dict[base_symbol] = {}
+
+                # create date key if not exists
+                if date not in nested_dict[base_symbol]:
+                    nested_dict[base_symbol][date] = {}
+
+                # decide key
+                key = indices_ist if indices_ist else instrument
+
+                if key not in nested_dict[base_symbol][date]:
+                    nested_dict[base_symbol][date][key] = {}
+
+                # nested_dict[symbol][date][instrument].setdefault(time, {})
+
+                row_values = nested_dict[base_symbol][date][key] = [
+                    row["time"],
+                    row["open"],
+                    row["high"],
+                    row["low"],
+                    row["close"],
+                ]
+                if "volume" and "oi" in row:
+                    row_values.append(row["volume"]),
+                    row_values.append(row["oi"])
+
+                temp_dict = {base_symbol: {date: {key: row_values}}}
+                logger.info(f"{temp_dict}")
+                print(temp_dict)
+            print("logg generated")
 
             # --- Calculate SMA(s) ---
             for period in sma_periods:
@@ -541,12 +603,14 @@ def stock_indicators():
                 rs = avg_gain / avg_loss
                 resampled[f"RSI_{period}"] = 100 - (100 / (1 + rs))
 
-
             # # --- Detect Engulfing Patterns ---
             resampled["pattern"] = None
             resampled["signal"] = None
             resampled["prev_open"] = None
             resampled["prev_close"] = None
+            resampled["signal_price"] = None
+            resampled["target_price"] = None
+            resampled["stoploss_price"] = None
 
             for i in range(1, len(resampled)):
                 prev = resampled.iloc[i - 1]
@@ -558,38 +622,59 @@ def stock_indicators():
                 prev_body = abs(prev_close - prev_open)
                 curr_body = abs(curr_close - curr_open)
 
+                # Determine candle colors
+                prev_color = (
+                    "green"
+                    if prev_close > prev_open
+                    else "red" if prev_close < prev_open else "neutral"
+                )
+                curr_color = (
+                    "green"
+                    if curr_close > curr_open
+                    else "red" if curr_close < curr_open else "neutral"
+                )
+
+                # Store previous candle values for current row
+                resampled.loc[i, "prev_open"] = prev_open
+                resampled.loc[i, "prev_close"] = prev_close
+
                 # --- Strong Bullish Engulfing ---
                 if (
-                    prev_close < prev_open and                  # previous bearish
-                    curr_close > curr_open and                  # current bullish
-                    curr_open <= prev_close and                 # open below previous close
-                    curr_close >= prev_open and                 # close above previous open
-                    curr_body > prev_body  
-
+                    prev_color == "red"  # previous bearish (red)
+                    and curr_color == "green"  # current bullish (green)
+                    and curr_open
+                    <= prev_close  # current open below/equal previous close
+                    and curr_close
+                    >= prev_open  # current close above/equal previous open
+                    and curr_body > prev_body  # stronger body
                 ):
-                    resampled["prev_open"] = prev_open
-                    resampled["prev_close"] = prev_close
+                    signal_price = curr_close  # Buy at close price
+                    target_price = signal_price * (1 + target / 100)
+                    stoploss_price = signal_price - ((signal_price * stoploss) / 100)
                     resampled.loc[i, "pattern"] = "Strong_Bullish_Engulfing"
                     resampled.loc[i, "signal"] = "BUY"
-
+                    resampled.loc[i, "signal_price"] = signal_price
+                    resampled.loc[i, "target_price"] = target_price
+                    resampled.loc[i, "stoploss_price"] = stoploss_price
 
                 # --- Strong Bearish Engulfing ---
                 elif (
-                    prev_close > prev_open  # previous bullish
-                    and curr_close < curr_open  # current bearish
-                    and curr_open >= prev_close  # open above previous close
-                    and curr_close <= prev_open  # close below previous open
+                    prev_color == "green"  # previous bullish (green)
+                    and curr_color == "red"  # current bearish (red)
+                    and curr_open
+                    >= prev_close  # current open above/equal previous close
+                    and curr_close
+                    <= prev_open  # current close below/equal previous open
                     and curr_body > prev_body  # stronger body
                 ):
-                    resampled["prev_open"] = prev_open
-                    resampled["prev_close"] = prev_close
                     resampled.loc[i, "pattern"] = "Strong_Bearish_Engulfing"
                     resampled.loc[i, "signal"] = "SELL"
-
+                    resampled.loc[i, "signal_price"] = curr_close  # Buy at close price
 
             all_resampled.append(resampled)
             source_files.append(file_path)
 
+        
         if all_resampled:
             combined = (
                 pd.concat(all_resampled).sort_values("Datetime").reset_index(drop=True)
@@ -606,3 +691,151 @@ def stock_indicators():
             }
 
     return jsonify(results), 200
+
+
+@compare_db_feather_bp.route("/db_fether_compare", methods=["POST"])
+def db_fether_compare():
+
+    # Setup logging
+    logging.basicConfig(
+        filename="compare_log.txt",
+        level=logging.INFO,
+        format="%(asctime)s - %(message)s",
+    )
+
+    # Connect to DB once
+    conn = mysql.connector.connect(
+        host="122.176.143.66",
+        user="nikhil",
+        password="welcome@123",
+        database="historicaldb",
+    )
+    cursor = conn.cursor()
+    query = "SELECT * FROM sbin_future WHERE date = 230105 "
+    cursor.execute(query)
+
+    columns = [desc[0] for desc in cursor.description]
+    df_db = pd.DataFrame(cursor.fetchall(), columns=columns)
+
+    # Save for later comparison
+    df_db.to_feather("db_output.feather")
+    print(df_db.head())
+    # load fether file
+    df_feather = pd.read_feather(r"datafolder\sbin_future.feather")
+    print(df_feather.head())
+
+    fether_col = sorted(df_feather.columns.to_list())
+    # print(fether_col)
+    db_col = sorted(df_db.columns.to_list())
+    # print(db_col)
+
+    if len(df_db) == (len(df_feather)) and fether_col == (db_col):
+        print("same")
+        logging.info("same")
+    else:
+        print(
+            f"Feather file column {df_feather.columns}, {len(df_db)} database file column are {df_db.columns},{len(df_feather)}"
+        )
+        return logging.info(
+            f"Feather file column {df_feather.columns}  database file column are {df_db.columns}"
+        )
+
+
+@nested_array_bp.route("/array_sma_nested", methods=["POST"])
+def array_sma_nested():
+    data = request.get_json()
+    if not data or "symbol" not in data or "minute" not in data:
+        return jsonify({"error": "symbol and minute are required"}), 400
+
+    # --- Normalize input ---
+    symbol_input = data["symbol"]
+    if isinstance(symbol_input, str):
+        symbols = [symbol_input.upper()]
+    elif isinstance(symbol_input, list):
+        symbols = [s.upper() for s in symbol_input if isinstance(s, str)]
+        if not symbols:
+            return jsonify({"error": "Symbol list is empty or invalid"}), 400
+    else:
+        return jsonify({"error": "Field 'symbol' must be a string or list"}), 400
+
+    minute = int(data["minute"])
+    rsi_periods = data.get("rsi_periods", [])
+    base_path = os.path.normpath("datafolder")
+    results = {}
+    # --- Determine target paths ---
+    year = data.get("year")
+    month = data.get("month")
+    day = data.get("day")
+
+    target_paths = []
+
+    try:
+        if year:
+            year_path = os.path.join(base_path, year)
+            months = [month] if month else sorted(os.listdir(year_path))
+            for m in months:
+                month_path = os.path.join(year_path, m)
+                days = [day] if day else sorted(os.listdir(month_path))
+                for d in days:
+                    target_paths.append(os.path.join(month_path, d))
+        else:
+            # Auto-detect latest date if no year is provided
+            years = sorted(os.listdir(base_path), reverse=True)
+            latest_year = years[0]
+            months = sorted(
+                os.listdir(os.path.join(base_path, latest_year)), reverse=True
+            )
+            latest_month = months[0]
+            days = sorted(
+                os.listdir(os.path.join(base_path, latest_year, latest_month)),
+                reverse=True,
+            )
+            latest_day = days[0]
+            target_paths.append(
+                os.path.join(base_path, latest_year, latest_month, latest_day)
+            )
+    except Exception as e:
+        return jsonify({"error": f"Failed to locate dataset folders: {str(e)}"}), 500
+
+    for symbol in symbols:
+        source_files = []
+        for target_path in target_paths:
+            file_name = f"{symbol.lower()}_cash.feather"
+            file_path = os.path.join(target_path, file_name)
+
+            if not os.path.exists(file_path):
+                continue
+            try:
+                df = pd.read_feather(file_path)
+                new_data = pd.DataFrame(df)
+                return new_data
+            except Exception as e:
+                continue
+
+
+# df = pd.read_feather(r"dataset\2023\JAN\06\sbin_cash.feather")
+
+# # Convert date & time to string and pad time correctly
+# df['date'] = df['date'].astype(str)
+# df['time'] = df['time'].astype(str).str.zfill(6)
+
+# # Create key "YYMMDD HHMMSS"
+# df['key'] = df['date'] + " " + df['time']
+
+# # Drop date & time and keep price fields
+# df.drop(columns=['date', 'time'], inplace=True)
+
+# # Create dictionary with key as index
+# nested_dict = df.head(4).set_index('key').to_dict(orient='index')
+
+# # print(list(nested_dict.items())[:5] )
+
+# for item in list(nested_dict.items()):
+#     print(item)
+# # print(list(nested_dict.items()))
+# flatten_array={}
+
+# for outer_k, inner_dict in nested_dict.items():
+#     for inner_k, value in inner_dict.items():
+#         flatten_array[f"{outer_k}_{inner_k}"] = value
+# print(flatten_array)

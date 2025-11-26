@@ -1,7 +1,9 @@
 import mysql.connector
 
 conn = mysql.connector.connect(
-    host="localhost", user="root", password="Krishna@794", database="Stock_DB"
+    # host="localhost", user="root", password="Krishna@794", database="Stock_DB"
+    host="122.176.143.66", user="nikhil", password="welcome@123", database="historicaldb"
+    
 )
 
 cursor = conn.cursor()
@@ -31,6 +33,27 @@ cursor = conn.cursor()
 # print("Table created successfully!")
 
 
+# ------fetch data---------------------------------------
+
+# query = """
+# SELECT * FROM sbin_future
+# WHERE date = 220201
+# """
+
+# cursor.execute(query)
+
+import pandas as pd
+
+query = "SELECT * FROM sbin_future WHERE date = 220201"
+cursor.execute(query)
+
+columns = [desc[0] for desc in cursor.description]
+df_db = pd.DataFrame(cursor.fetchall(), columns=columns)
+
+# Save for later comparison
+df_db.to_feather("db_output.feather")
+print("✅ Database data saved to db_output.feather")
+
 # ------ADD MEW COLUMN---------------------------------------
 
 # ✅ Add new column `time`
@@ -51,18 +74,18 @@ cursor = conn.cursor()
 # cursor.execute(insert_query, stock_data)
 
 
-# -------insert query--------------------------------------------
+# -------delete query--------------------------------------------
 
 # cursor.execute("DROP TABLE IF EXISTS UserStock")
 
 # -------remove data query--------------------------------------------
 
-cursor.execute("TRUNCATE TABLE UserStock")
+# cursor.execute("TRUNCATE TABLE UserStock")
 
 conn.commit()
 # print("Table droped successfully!")
 print("Table trunket successfully!")
 
-# Close the connection
+# --- Close ---
 cursor.close()
 conn.close()

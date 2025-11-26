@@ -1,0 +1,1 @@
+Moment trade data -->230102BANKNIFTY12JAN2345000CE34200O:33.45 H:35.65 L:32.25 C:34.8 | Entry level at : 33.45 
